@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="ku" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>پشکنەر و جیاکەرەوەی کەناڵە کاراکانی M3U</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#05080a] text-white min-h-screen flex items-center justify-center p-4">
+    <div class="bg-[#0d1117] border border-gray-800 p-8 rounded-2xl shadow-2xl w-full max-w-xl text-center">
+        <h1 class="text-2xl font-bold text-yellow-400 mb-2">جیاکەرەوەی کەناڵە کاراکانی M3U</h1>
+        <p class="text-xs text-gray-400 mb-6">فایلی .m3u هەڵبژێرە تاوەکو لینکە کاراکان بە ڕاستەقینە پشکنین بکات و جیایان بکاتەوە.</p>
+        
+        <form id="checker-form" class="space-y-4 text-right">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">فایلی .m3u دیاری بکە:</label>
+                <input type="file" id="m3u-file" accept=".m3u" required class="w-full p-3 bg-[#0b0e14] border border-gray-700 rounded-xl text-sm text-gray-300">
+            </div>
+
+            <button type="submit" class="w-full bg-teal-600 hover:bg-teal-700 text-white py-3 rounded-xl font-bold transition duration-200 shadow-lg">دەستپێکردنی پشکنینی ڕاستەقینە</button>
+        </form>
+        <div id="checker-status" class="mt-4 text-sm text-gray-400 hidden"></div>
+    </div>
+
+<script>
+    function downloadFile(content, filename) {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function getCurrentDateTime() {
+        const now = new Date();
+        return now.getFullYear() + '-' +
+               ('0' + (now.getMonth() + 1)).slice(-2) + '-' +
+               ('0' + now.getDate()).slice(-2) + '_' +
+               ('0' + now.getHours()).slice(-2) +
+               ('0' + now.getMinutes()).slice(-2);
+    }
+
+    document.getElementById('checker-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById('m3u-file');
+        const statusDiv = document.getElementById('checker-status');
+        
+        if (!fileInput.files.length) return;
+        const file = fileInput.files[0];
+
+        statusDiv.classList.remove('hidden');
+        statusDiv.innerHTML = '⏳ پرۆسەی خوێندنەوە و پشکنینی لینکەکان دەستی پێکرد...';
+
+        const reader = new FileReader();
+        reader.onload = async function(e) {
+            const lines = e.target.result.split('\n');
+            let pairs = [];
+
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                if (line.startsWith('#EXTINF:')) {
+                    let urlLine = '';
+                    if (lines[i + 1] && lines[i + 1].trim().startsWith('http')) {
+                        urlLine = lines[i + 1].trim();
+                    } else if (lines[i + 2] && lines[i + 2].trim().startsWith('http')) {
+                        urlLine = lines[i + 2].trim();
+                    }
+
+                    if (urlLine) {
+                        pairs.push({ info: line, url: urlLine });
+                    }
+                }
+            }
+
+            statusDiv.innerHTML = `🔍 کۆی گشتی ${pairs.length} کەناڵ دۆزرایەوە، خەریکی پشکنینین...`;
+
+            let httpsChannels = [];
+            let httpChannels = [];
+            let checkedCount = 0;
+
+            for (const item of pairs) {
+                let isOnline = false;
+                try {
+                    const controller = new AbortController();
+                    const timeout = setTimeout(() => controller.abort(), 3500);
+                    
+                    // تاقیکردنەوەی داواکاری بە مەرجی توندتر
+                    const response = await fetch(item.url, { method: 'HEAD', signal: controller.signal });
+                    clearTimeout(timeout);
+                    
+                    // ئەگەر وەڵامی سێرڤەر سەرکەوتوو بوو (Status 200 تا 399)
+                    if (response.ok || response.status < 400) {
+                        isOnline = true;
+                    }
+                } catch (error) {
+                    // ئەگەر بە HEAD سەرکەوتوو نەبوو، تاقیکردنەوەی بەستەری لاوەکی (Image/Stream Ping) دەکەین بە دڵنیایی زیاتر
+                    isOnline = await new Promise((resolve) => {
+                        const img = new Image();
+                        const timer = setTimeout(() => { resolve(false); }, 2000);
+                        img.onload = () => { clearTimeout(timer); resolve(true); };
+                        img.onerror = () => { 
+                            clearTimeout(timer); 
+                            // لێرەدا بۆ ئەوەی کەناڵە مردووەکان بە هەڵە بە کارا نەژمێردرێن، ئەگەر هەڵە هەبوو دەینوسین ناچالاک
+                            resolve(false); 
+                        };
+                        img.src = item.url;
+                    });
+                }
+
+                if (isOnline) {
+                    if (item.url.toLowerCase().startsWith('https://')) {
+                        httpsChannels.push(`${item.info}\n${item.url}`);
+                    } else if (item.url.toLowerCase().startsWith('http://')) {
+                        httpChannels.push(`${item.info}\n${item.url}`);
+                    }
+                }
+
+                checkedCount++;
+                statusDiv.innerHTML = `⏳ پشکنین: ${checkedCount}/${pairs.length} تێپەڕی ... (کارا: ${httpsChannels.length + httpChannels.length})`;
+            }
+
+            const baseName = file.name.split('.').slice(0, -1).join('.');
+            
+            let httpsContent = '#EXTM3U\n' + httpsChannels.join('\n') + '\n';
+            let httpContent = '#EXTM3U\n' + httpChannels.join('\n') + '\n';
+
+            if (httpsChannels.length > 0) {
+                downloadFile(httpsContent, `${baseName}_Active_HTTPS_${getCurrentDateTime()}.m3u`);
+            }
+            
+            if (httpChannels.length > 0) {
+                setTimeout(() => {
+                    downloadFile(httpContent, `${baseName}_Active_HTTP_${getCurrentDateTime()}.m3u`);
+                }, 600);
+            }
+
+            statusDiv.innerHTML = `✅ پشکنین تەواو بوو!<br>🟢 کەناڵە کاراکانی HTTPS: ${httpsChannels.length}<br>🟢 کەناڵە کاراکانی HTTP: ${httpChannels.length}<br> فایلەکان بە سەرکەوتوویی داگیراون.`;
+        };
+        reader.readAsText(file, 'utf-8');
+    });
+</script>
+</body>
+</html>
